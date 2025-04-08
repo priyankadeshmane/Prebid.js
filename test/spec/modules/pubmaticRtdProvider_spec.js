@@ -10,6 +10,8 @@ import {
     _profileConfigs, _floorsData, defaultValueTemplate, withTimeout, configMerged
 } from '../../../modules/pubmaticRtdProvider.js';
 import sinon from 'sinon';
+import * as bidderTimeoutUtils from '../../../libraries/bidderTimeoutUtils/bidderTimeoutUtils.js';
+import * as prebidGlobal from 'src/prebidGlobal.js';
 
 let sandbox;
 
@@ -562,6 +564,94 @@ describe('Pubmatic RTD Provider', () => {
             await pubmaticSubmodule.getBidRequestData(reqBidsConfigObj, callback);
     
             expect(callback.called).to.be.true;
+        });
+
+        it('should increment the timeout with the calculated timeout modifier when bidderTimeout plugin is enabled', () => {
+            const baseTimeout = 2000;
+            const addedTimeout = 200;
+            const getConfigStub = sandbox.stub().returns(baseTimeout);
+            sandbox.stub(prebidGlobal, 'getGlobal').callsFake(() => {
+                return {
+                    getConfig: getConfigStub,
+                    adUnits: [{
+                        code: 'test1',
+                        mediaTypes: {
+                            video: {}
+                        }
+                    }]
+                }
+            });
+
+            const reqBidsConfigObj = {
+                adUnits: [{
+                    code: 'test1',
+                    mediaTypes: {
+                        video: {}
+                    }
+                }],
+                timeout: baseTimeout,
+                ortb2Fragments: {
+                    bidder: {}
+                }
+            };
+
+            const calculateTimeoutModifierStub = sandbox.stub(bidderTimeoutUtils, 'calculateTimeoutModifier');
+            calculateTimeoutModifierStub.returns(addedTimeout);
+
+            const timeoutConfig = {
+                enabled: true,
+                baseTimeout: baseTimeout
+            };
+
+            const adUnits = reqBidsConfigObj.adUnits || getGlobal().adUnits;
+            const timeoutModifier = calculateTimeoutModifierStub(adUnits);
+            const bidderTimeout = timeoutConfig.baseTimeout ? timeoutConfig.baseTimeout : reqBidsConfigObj.timeout || getGlobal().getConfig('bidderTimeout');
+            reqBidsConfigObj.timeout = bidderTimeout + timeoutModifier;
+
+            expect(calculateTimeoutModifierStub.called).to.be.true;
+            expect(reqBidsConfigObj.timeout).to.equal(baseTimeout + addedTimeout);
+        });
+
+        it('should increment timeout with multiple matching rules', () => {
+            const baseTimeout = 2000;
+            const addedTimeout = 400;
+            const getConfigStub = sandbox.stub().returns(baseTimeout);
+            sandbox.stub(prebidGlobal, 'getGlobal').callsFake(() => {
+                return {
+                    getConfig: getConfigStub
+                }
+            });
+            const testReqBidsConfigObj = {
+                adUnits: [{
+                    code: 'test1',
+                    mediaTypes: {
+                        video: {}
+                    }
+                }, {
+                    code: 'test2',
+                    mediaTypes: {
+                        video: {}
+                    }
+                }],
+                timeout: baseTimeout,
+                ortb2Fragments: {
+                    bidder: {}
+                }
+            };
+            const rules = {
+                numAdUnits: {
+                    '2': addedTimeout / 2
+                },
+                includesVideo: {
+                    'true': addedTimeout / 2,
+                    'false': 50
+                }
+            };
+            
+            const timeoutModifier = bidderTimeoutUtils.calculateTimeoutModifier(testReqBidsConfigObj.adUnits, rules);
+            testReqBidsConfigObj.timeout = baseTimeout + timeoutModifier;
+            
+            expect(testReqBidsConfigObj.timeout).to.equal(baseTimeout + addedTimeout);
         });
     });        
 

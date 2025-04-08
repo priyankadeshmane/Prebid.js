@@ -3,6 +3,8 @@ import { logError, isStr, isPlainObject, isEmpty, isFn, mergeDeep } from '../src
 import { config as conf } from '../src/config.js';
 import { getDeviceType as fetchDeviceType, getOS } from '../libraries/userAgentUtils/index.js';
 import { getLowEntropySUA } from '../src/fpd/sua.js';
+import { getGlobal } from '../src/prebidGlobal.js';
+import { calculateTimeoutModifier } from '../libraries/bidderTimeoutUtils/bidderTimeoutUtils.js';
 
 /**
  * @typedef {import('../modules/rtdModule/index.js').RtdSubmodule} RtdSubmodule
@@ -18,6 +20,10 @@ const CONSTANTS = Object.freeze({
   SUBMODULE_NAME: 'pubmatic',
   REAL_TIME_MODULE: 'realTimeData',
   LOG_PRE_FIX: 'PubMatic-Rtd-Provider: ',
+  INCLUDES_VIDEOS: 'includesVideo',
+  NUM_AD_UNITS: 'numAdUnits',
+  DEVICE_TYPE: 'deviceType',
+  CONNECTION_SPEED: 'connectionSpeed',
   UTM: 'utm_',
   UTM_VALUES: {
     TRUE: '1',
@@ -35,6 +41,29 @@ const CONSTANTS = Object.freeze({
     CONFIGS: 'config.json'
   }
 });
+
+const RULES = {
+  [CONSTANTS.INCLUDES_VIDEOS]: {
+    "true": 200,
+    "false": 50
+  },
+  [CONSTANTS.NUM_AD_UNITS]: {
+    "1-5": 100,
+    "6-10": 200,
+    "11-15": 300
+  },
+  [CONSTANTS.DEVICE_TYPE]: {
+    "2": 50,
+    "4": 100,
+    "5": 200
+  },
+  [CONSTANTS.CONNECTION_SPEED]: {
+    "slow": 200,
+    "medium": 100,
+    "fast": 50,
+    "unknown": 10
+  }
+};
 
 const BROWSER_REGEX_MAP = [
   { regex: /\b(?:crios)\/([\w\.]+)/i, id: 1 }, // Chrome for iOS
@@ -237,6 +266,17 @@ const init = (config, _userConsent) => {
  * @param {Object} userConsent
  */
 const getBidRequestData = (reqBidsConfigObj, callback) => {
+  _fetchConfigPromise.then((profileConfigs) => {
+    const timeoutConfig = profileConfigs?.plugins?.bidderTimeout;
+
+    if (timeoutConfig?.enabled) {
+      const adUnits = reqBidsConfigObj.adUnits || getGlobal().adUnits;
+      const timeoutModifier = calculateTimeoutModifier(adUnits, RULES);
+      const bidderTimeout = timeoutConfig.baseTimeout ? timeoutConfig.baseTimeout : reqBidsConfigObj.timeout || getGlobal().getConfig('bidderTimeout');
+      reqBidsConfigObj.timeout = bidderTimeout + timeoutModifier;
+    }
+  });
+
     configMergedPromise.then(() => {
         const hookConfig = {
             reqBidsConfigObj,
