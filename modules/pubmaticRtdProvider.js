@@ -13,6 +13,7 @@ import { getLowEntropySUA } from '../src/fpd/sua.js';
  * We utilize the continueAuction function from the priceFloors module to incorporate price floors data into the current auction.
  */
 import { continueAuction } from './priceFloors.js'; // eslint-disable-line prebid/validate-imports
+import { getGlobal } from '../src/prebidGlobal.js';
 
 const CONSTANTS = Object.freeze({
   SUBMODULE_NAME: 'pubmatic',
@@ -214,19 +215,6 @@ const init = (config, _userConsent) => {
     _fetchFloorRulesPromise = fetchData(publisherId, profileId, "FLOORS");
     _fetchConfigPromise = fetchData(publisherId, profileId, "CONFIGS");
 
-    _fetchConfigPromise.then(async (profileConfigs) => {
-      const auctionDelay = conf.getConfig('realTimeData').auctionDelay;
-      const maxWaitTime = 0.8 * auctionDelay;
-
-      const elapsedTime = Date.now() - initTime;
-      const remainingTime = Math.max(maxWaitTime - elapsedTime, 0);
-      const floorsData = await withTimeout(_fetchFloorRulesPromise, remainingTime);
-
-      const floorsConfig = getFloorsConfig(floorsData, profileConfigs);
-      floorsConfig && conf.setConfig(floorsConfig);
-      configMerged();
-    });
-
     return true;
 };
 
@@ -237,10 +225,42 @@ const init = (config, _userConsent) => {
  * @param {Object} userConsent
  */
 const getBidRequestData = (reqBidsConfigObj, callback) => {
-    configMergedPromise.then(() => {
-        const hookConfig = {
-            reqBidsConfigObj,
-            context: this,
+  _fetchConfigPromise.then(async (profileConfigs) => {
+    const auctionDelay = conf.getConfig('realTimeData').auctionDelay;
+    const maxWaitTime = 0.8 * auctionDelay;
+
+    const elapsedTime = Date.now() - initTime;
+    const remainingTime = Math.max(maxWaitTime - elapsedTime, 0);
+    const floorsData = await withTimeout(_fetchFloorRulesPromise, remainingTime);
+
+    const floorsConfig = getFloorsConfig(floorsData, profileConfigs);
+
+    reqBidsConfigObj.adUnits.forEach(adUnit => {
+      let highestCachedBid;
+      highestCachedBid = getGlobal().getHighestUnusedBidResponseForAdUnitCode(adUnit.code);
+      if (highestCachedBid?.cpm > floorsConfig?.floors?.floorMin) {
+        let ortb2Imp = {
+          ext: {
+            prebid: {
+              floors: {
+                floorMin: highestCachedBid.cpm
+              }
+            }
+          }
+        }
+
+        mergeDeep(adUnit.ortb2Imp, {...ortb2Imp});
+      }        
+    });
+
+    floorsConfig && conf.setConfig(floorsConfig);
+    configMerged();
+  });
+
+  configMergedPromise.then(() => {
+    const hookConfig = {
+      reqBidsConfigObj,
+      context: this,
             nextFn: () => true,
             haveExited: false,
             timer: null
