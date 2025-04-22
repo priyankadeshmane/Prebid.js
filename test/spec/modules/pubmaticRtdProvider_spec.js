@@ -11,30 +11,30 @@ import {
 } from '../../../modules/pubmaticRtdProvider.js';
 import sinon from 'sinon';
 
-describe('Pubmatic RTD Provider', () => {
-    let sandbox;
+let sandbox;
 
-    beforeEach(() => {
-        sandbox = sinon.createSandbox();
-        sandbox.stub(conf, 'getConfig').callsFake(() => {
-            return {
-                floors: {
-                    'enforcement': {
-                        'floorDeals': true,
-                        'enforceJS': true
-                    }
-                },
-                realTimeData: {
-                    auctionDelay: 100
+beforeEach(() => {
+    sandbox = sinon.createSandbox();
+    sandbox.stub(conf, 'getConfig').callsFake(() => {
+        return {
+            floors: {
+                'enforcement': {
+                    'floorDeals': true,
+                    'enforceJS': true
                 }
-            };
-        });
+            },
+            realTimeData: {
+                auctionDelay: 100
+            }
+        };
     });
-    
-    afterEach(() => {
-        sandbox.restore();
-    });
+});
 
+afterEach(() => {
+    sandbox.restore();
+});
+
+describe('Pubmatic RTD Provider', () => {
     describe('registerSubModule', () => {
         it('should register RTD submodule provider', () => {
             let submoduleStub = sinon.stub(hook, 'submodule');
@@ -495,19 +495,19 @@ describe('Pubmatic RTD Provider', () => {
     });
 
     describe('getBidRequestData', function () {
-        let callback, continueAuctionStub, mergeDeepStub, logErrorStub;
+        let callback, continueAuctionStub, mergeDeepStub, logErrorStub, getHighestUnusedBidStub;
 
         const reqBidsConfigObj = {
             adUnits: [{ code: 'ad-slot-code-0' }],
             auctionId: 'auction-id-0',
             ortb2Fragments: {
-              bidder: {
-                user: {
-                  ext: {
-                    ctr: 'US',
-                  }
+                bidder: {
+                    user: {
+                        ext: {
+                            ctr: 'US',
+                        }
+                    }
                 }
-              }
             }
         };
 
@@ -531,18 +531,21 @@ describe('Pubmatic RTD Provider', () => {
             callback = sinon.spy();
             continueAuctionStub = sandbox.stub(priceFloors, 'continueAuction');
             logErrorStub = sandbox.stub(utils, 'logError');
-    
+            getHighestUnusedBidStub = sandbox.stub();
+            sandbox.stub(global, 'getGlobal').returns({
+                getHighestUnusedBidResponseForAdUnitCode: getHighestUnusedBidStub
+            });
             global.configMergedPromise = Promise.resolve();
         });
-    
+
         afterEach(() => {
             sandbox.restore(); // Restore all stubs/spies
         });
-    
+
         it('should call continueAuction with correct hookConfig', async function () {
             configMerged();
             await pubmaticSubmodule.getBidRequestData(reqBidsConfigObj, callback);
-    
+
             expect(continueAuctionStub.called).to.be.true;
             expect(continueAuctionStub.firstCall.args[0]).to.have.property('reqBidsConfigObj', reqBidsConfigObj);
             expect(continueAuctionStub.firstCall.args[0]).to.have.property('haveExited', false);
@@ -560,10 +563,70 @@ describe('Pubmatic RTD Provider', () => {
         it('should call callback once after execution', async function () {
             configMerged();
             await pubmaticSubmodule.getBidRequestData(reqBidsConfigObj, callback);
-    
+
             expect(callback.called).to.be.true;
         });
-    });        
+
+        describe('highest cached bid floor handling', function () {
+            let testReqBidsConfigObj;
+
+            beforeEach(() => {
+                testReqBidsConfigObj = {
+                    adUnits: [{ code: 'test-ad-unit', ortb2Imp: {} }]
+                };
+            });
+
+            it('should set floorMin when highest cached bid is higher than floor minimum', async () => {
+                const highestCachedBid = { cpm: 5.0 };
+                const floorsConfig = { floors: { floorMin: 3.0 } };
+                getHighestUnusedBidStub.returns(highestCachedBid);
+                sandbox.stub(getFloorsConfig).returns(floorsConfig);
+
+                await pubmaticSubmodule.getBidRequestData(testReqBidsConfigObj, callback);
+
+                expect(testReqBidsConfigObj.adUnits[0].ortb2Imp).to.deep.include({
+                    ext: {
+                        prebid: {
+                            floors: {
+                                floorMin: 5.0
+                            }
+                        }
+                    }
+                });
+            });
+
+            it('should not set floorMin when highest cached bid is lower than floor minimum', async () => {
+                const highestCachedBid = { cpm: 2.0 };
+                const floorsConfig = { floors: { floorMin: 3.0 } };
+                getHighestUnusedBidStub.returns(highestCachedBid);
+                sandbox.stub(getFloorsConfig).returns(floorsConfig);
+
+                await pubmaticSubmodule.getBidRequestData(testReqBidsConfigObj, callback);
+
+                expect(testReqBidsConfigObj.adUnits[0].ortb2Imp).to.not.have.nested.property('ext.prebid.floors.floorMin');
+            });
+
+            it('should not set floorMin when no cached bid exists', async () => {
+                const floorsConfig = { floors: { floorMin: 3.0 } };
+                getHighestUnusedBidStub.returns(null);
+                sandbox.stub(getFloorsConfig).returns(floorsConfig);
+
+                await pubmaticSubmodule.getBidRequestData(testReqBidsConfigObj, callback);
+
+                expect(testReqBidsConfigObj.adUnits[0].ortb2Imp).to.not.have.nested.property('ext.prebid.floors.floorMin');
+            });
+
+            it('should not set floorMin when floors config is missing', async () => {
+                const highestCachedBid = { cpm: 5.0 };
+                getHighestUnusedBidStub.returns(highestCachedBid);
+                sandbox.stub(getFloorsConfig).returns(null);
+
+                await pubmaticSubmodule.getBidRequestData(testReqBidsConfigObj, callback);
+
+                expect(testReqBidsConfigObj.adUnits[0].ortb2Imp).to.not.have.nested.property('ext.prebid.floors.floorMin');
+            });
+        });
+    });
 
     describe('withTimeout', function () {
         it('should resolve with the original promise value if it resolves before the timeout', async function () {
