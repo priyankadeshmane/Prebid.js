@@ -31,7 +31,7 @@ const CONSTANTS = Object.freeze({
     NIGHT: 'night',
   },
   ENDPOINTS: {
-    BASEURL: 'https://ads.pubmatic.com/AdServer/js/pwt',
+    BASEURL: 'http://localhost:8080/pwt',
     FLOORS: 'floors.json',
     CONFIGS: 'config.json'
   }
@@ -66,6 +66,11 @@ export let configMerged;
 // configMerged is a reference to the function that can resolve configMergedPromise whenever we want
 let configMergedPromise = new Promise((resolve) => { configMerged = resolve; });
 export let _country;
+
+let floorsConfig;
+export function setFloorsConfig(config) {
+  floorsConfig = config;
+}
 
 // Waits for a given promise to resolve within a timeout
 export function withTimeout(promise, ms) {
@@ -215,6 +220,19 @@ const init = (config, _userConsent) => {
     _fetchFloorRulesPromise = fetchData(publisherId, profileId, "FLOORS");
     _fetchConfigPromise = fetchData(publisherId, profileId, "CONFIGS");
 
+    _fetchConfigPromise.then(async (profileConfigs) => {
+      const auctionDelay = conf.getConfig('realTimeData').auctionDelay;
+      const maxWaitTime = 0.8 * auctionDelay;
+
+      const elapsedTime = Date.now() - initTime;
+      const remainingTime = Math.max(maxWaitTime - elapsedTime, 0);
+      const floorsData = await withTimeout(_fetchFloorRulesPromise, remainingTime);
+
+      floorsConfig = getFloorsConfig(floorsData, profileConfigs);
+      floorsConfig && conf.setConfig(floorsConfig);
+      configMerged();
+    });
+
     return true;
 };
 
@@ -225,42 +243,27 @@ const init = (config, _userConsent) => {
  * @param {Object} userConsent
  */
 const getBidRequestData = (reqBidsConfigObj, callback) => {
-  _fetchConfigPromise.then(async (profileConfigs) => {
-    const auctionDelay = conf.getConfig('realTimeData').auctionDelay;
-    const maxWaitTime = 0.8 * auctionDelay;
-
-    const elapsedTime = Date.now() - initTime;
-    const remainingTime = Math.max(maxWaitTime - elapsedTime, 0);
-    const floorsData = await withTimeout(_fetchFloorRulesPromise, remainingTime);
-
-    const floorsConfig = getFloorsConfig(floorsData, profileConfigs);
-
-    reqBidsConfigObj.adUnits.forEach(adUnit => {
-      let highestCachedBid;
-      highestCachedBid = getGlobal().getHighestUnusedBidResponseForAdUnitCode(adUnit.code);
-      if (highestCachedBid?.cpm > floorsConfig?.floors?.floorMin) {
-        let ortb2Imp = {
-          ext: {
-            prebid: {
-              floors: {
-                floorMin: highestCachedBid.cpm
+    configMergedPromise.then(() => {
+      reqBidsConfigObj.adUnits.forEach(adUnit => {
+        let highestCachedBid;
+        highestCachedBid = getGlobal().getHighestUnusedBidResponseForAdUnitCode(adUnit.code);
+        if (!floorsConfig?.floors?.floorMin || highestCachedBid?.cpm > floorsConfig?.floors?.floorMin) {
+          let ortb2Imp = {
+            ext: {
+              prebid: {
+                floors: {
+                  floorMin: highestCachedBid.cpm
+                }
               }
             }
           }
-        }
+          mergeDeep(adUnit.ortb2Imp, {...ortb2Imp});
+        }        
+      });
 
-        mergeDeep(adUnit.ortb2Imp, {...ortb2Imp});
-      }        
-    });
-
-    floorsConfig && conf.setConfig(floorsConfig);
-    configMerged();
-  });
-
-  configMergedPromise.then(() => {
-    const hookConfig = {
-      reqBidsConfigObj,
-      context: this,
+      const hookConfig = {
+            reqBidsConfigObj,
+            context: this,
             nextFn: () => true,
             haveExited: false,
             timer: null
