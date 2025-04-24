@@ -12,31 +12,32 @@ import {
 import sinon from 'sinon';
 import * as bidderTimeoutUtils from '../../../libraries/bidderTimeoutUtils/bidderTimeoutUtils.js';
 import * as prebidGlobal from 'src/prebidGlobal.js';
-
-let sandbox;
-
-beforeEach(() => {
-    sandbox = sinon.createSandbox();
-    sandbox.stub(conf, 'getConfig').callsFake(() => {
-        return {
-            floors: {
-                'enforcement': {
-                    'floorDeals': true,
-                    'enforceJS': true
-                }
-            },
-            realTimeData: {
-                auctionDelay: 100
-            }
-        };
-    });
-});
-
-afterEach(() => {
-    sandbox.restore();
-});
+import sinon from 'sinon';
 
 describe('Pubmatic RTD Provider', () => {
+    let sandbox;
+
+    beforeEach(() => {
+        sandbox = sinon.createSandbox();
+        sandbox.stub(conf, 'getConfig').callsFake(() => {
+            return {
+                floors: {
+                    'enforcement': {
+                        'floorDeals': true,
+                        'enforceJS': true
+                    }
+                },
+                realTimeData: {
+                    auctionDelay: 100
+                }
+            };
+        });
+    });
+    
+    afterEach(() => {
+        sandbox.restore();
+    });
+
     describe('registerSubModule', () => {
         it('should register RTD submodule provider', () => {
             let submoduleStub = sinon.stub(hook, 'submodule');
