@@ -42,26 +42,26 @@ const CONSTANTS = Object.freeze({
   }
 });
 
-const RULES = {
+export const RULES_PERCENTAGE = {
   [CONSTANTS.INCLUDES_VIDEOS]: {
-    "true": 200,
-    "false": 50
+    "true": 20, // 20% of bidderTimeout
+    "false": 5  // 5% of bidderTimeout
   },
   [CONSTANTS.NUM_AD_UNITS]: {
-    "1-5": 100,
-    "6-10": 200,
-    "11-15": 300
+    "1-5": 10,   // 10% of bidderTimeout
+    "6-10": 20,  // 20% of bidderTimeout
+    "11-15": 30  // 30% of bidderTimeout
   },
   [CONSTANTS.DEVICE_TYPE]: {
-    "2": 50,
-    "4": 100,
-    "5": 200
+    "2": 5,   // 5% of bidderTimeout
+    "4": 10,  // 10% of bidderTimeout
+    "5": 20   // 20% of bidderTimeout
   },
   [CONSTANTS.CONNECTION_SPEED]: {
-    "slow": 200,
-    "medium": 100,
-    "fast": 50,
-    "unknown": 10
+    "slow": 20,     // 20% of bidderTimeout
+    "medium": 10,   // 10% of bidderTimeout
+    "fast": 5,      // 5% of bidderTimeout
+    "unknown": 1    // 1% of bidderTimeout
   }
 };
 
@@ -215,6 +215,30 @@ export const fetchData = async (publisherId, profileId, type) => {
 };
 
 /**
+ * Creates dynamic rules based on percentage values and baseTimeout
+ * @param {Object} percentageRules - Rules with percentage values
+ * @param {number} baseTimeout - Base timeout in milliseconds
+ * @return {Object} - Rules with calculated millisecond values
+ */
+export const createDynamicRules = (percentageRules, baseTimeout) => {
+  if (!percentageRules || !baseTimeout) {
+    return {};
+  }
+
+  const dynamicRules = {};
+  Object.keys(percentageRules).forEach(category => {
+    dynamicRules[category] = {};
+    
+    Object.keys(percentageRules[category]).forEach(key => {
+      const percentValue = percentageRules[category][key];
+        dynamicRules[category][key] = Math.floor(baseTimeout * (percentValue / 100));
+    });
+  });
+
+  return dynamicRules;
+};
+
+/**
  * Initialize the Pubmatic RTD Module.
  * @param {Object} config
  * @param {Object} _userConsent
@@ -270,9 +294,15 @@ const getBidRequestData = (reqBidsConfigObj, callback) => {
     const timeoutConfig = profileConfigs?.plugins?.bidderTimeout;
 
     if (timeoutConfig?.enabled) {
+      let rules;
       const adUnits = reqBidsConfigObj.adUnits || getGlobal().adUnits;
-      const timeoutModifier = calculateTimeoutModifier(adUnits, RULES);
       const bidderTimeout = timeoutConfig.baseTimeout ? timeoutConfig.baseTimeout : reqBidsConfigObj.timeout || getGlobal().getConfig('bidderTimeout');
+      if (timeoutConfig.rules && Object.keys(timeoutConfig.rules).length > 0) {
+        rules = timeoutConfig.rules;
+      } else {
+        rules = createDynamicRules(RULES_PERCENTAGE, bidderTimeout);
+      }
+      const timeoutModifier = calculateTimeoutModifier(adUnits, rules);
       reqBidsConfigObj.timeout = bidderTimeout + timeoutModifier;
     }
   });

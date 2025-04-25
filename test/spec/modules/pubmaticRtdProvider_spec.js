@@ -7,12 +7,11 @@ import * as hook from '../../../src/hook.js';
 import {
     registerSubModule, pubmaticSubmodule, getFloorsConfig, fetchData,
     getCurrentTimeOfDay, getBrowserType, getOs, getDeviceType, getCountry, getUtm, _country,
-    _profileConfigs, _floorsData, defaultValueTemplate, withTimeout, configMerged
+    _profileConfigs, _floorsData, defaultValueTemplate, withTimeout, configMerged, createDynamicRules, RULES_PERCENTAGE
 } from '../../../modules/pubmaticRtdProvider.js';
 import sinon from 'sinon';
 import * as bidderTimeoutUtils from '../../../libraries/bidderTimeoutUtils/bidderTimeoutUtils.js';
 import * as prebidGlobal from 'src/prebidGlobal.js';
-import sinon from 'sinon';
 
 describe('Pubmatic RTD Provider', () => {
     let sandbox;
@@ -530,12 +529,22 @@ describe('Pubmatic RTD Provider', () => {
             timer: null
         };
 
+        const timeoutConfig = {
+            enabled: true,
+            baseTimeout: 2000
+        };
+
         beforeEach(() => {
             callback = sinon.spy();
             continueAuctionStub = sandbox.stub(priceFloors, 'continueAuction');
             logErrorStub = sandbox.stub(utils, 'logError');
     
             global.configMergedPromise = Promise.resolve();
+            global._fetchConfigPromise = Promise.resolve({
+                plugins: {
+                    bidderTimeout: timeoutConfig
+                }
+            });
         });
     
         afterEach(() => {
@@ -698,6 +707,76 @@ describe('Pubmatic RTD Provider', () => {
             
             clearTimeoutSpy.restore();
             clock.restore();
+        });
+    });
+
+    describe('createDynamicRules', function () {
+        it('should correctly convert percentage values to milliseconds', function () {
+            const baseTimeout = 1000;
+            const dynamicRules = createDynamicRules(RULES_PERCENTAGE, baseTimeout);
+            
+            expect(dynamicRules['includesVideo']['true']).to.equal(200);
+            expect(dynamicRules['includesVideo']['false']).to.equal(50);
+            
+            expect(dynamicRules['numAdUnits']['1-5']).to.equal(100);
+            expect(dynamicRules['numAdUnits']['6-10']).to.equal(200);
+            expect(dynamicRules['numAdUnits']['11-15']).to.equal(300);
+            
+            expect(dynamicRules['deviceType']['2']).to.equal(50);
+            expect(dynamicRules['deviceType']['4']).to.equal(100);
+            expect(dynamicRules['deviceType']['5']).to.equal(200);
+            
+            expect(dynamicRules['connectionSpeed']['slow']).to.equal(200);
+            expect(dynamicRules['connectionSpeed']['medium']).to.equal(100);
+            expect(dynamicRules['connectionSpeed']['fast']).to.equal(50);
+            expect(dynamicRules['connectionSpeed']['unknown']).to.equal(10);
+        });
+
+        it('should correctly handle different baseTimeout values', function () {
+            const baseTimeout = 2000;
+            const dynamicRules = createDynamicRules(RULES_PERCENTAGE, baseTimeout);
+            
+            expect(dynamicRules['includesVideo']['true']).to.equal(400);
+            expect(dynamicRules['numAdUnits']['6-10']).to.equal(400);
+            expect(dynamicRules['deviceType']['4']).to.equal(200);
+            expect(dynamicRules['connectionSpeed']['medium']).to.equal(200);
+        });
+
+        it('should return empty object when percentageRules is not provided', function () {
+            const baseTimeout = 1000;
+            const dynamicRules = createDynamicRules(null, baseTimeout);
+            
+            expect(dynamicRules).to.deep.equal({});
+        });
+
+        it('should return empty object when baseTimeout is not provided', function () {
+            const dynamicRules = createDynamicRules(RULES_PERCENTAGE, null);
+            
+            expect(dynamicRules).to.deep.equal({});
+        });
+
+        it('should handle empty percentageRules object', function () {
+            const baseTimeout = 1000;
+            const dynamicRules = createDynamicRules({}, baseTimeout);
+            
+            expect(dynamicRules).to.deep.equal({});
+        });
+
+        it('should round down decimal values to integers', function () {
+            const baseTimeout = 333;
+            const testRules = {
+                test: {
+                    'a': 10,
+                    'b': 33,
+                    'c': 66
+                }
+            };
+            
+            const dynamicRules = createDynamicRules(testRules, baseTimeout);
+            
+            expect(dynamicRules.test['a']).to.equal(33);
+            expect(dynamicRules.test['b']).to.equal(109);
+            expect(dynamicRules.test['c']).to.equal(219);
         });
     });
 });
