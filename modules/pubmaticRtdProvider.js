@@ -3,6 +3,8 @@ import { logError, isStr, isPlainObject, isEmpty, isFn, mergeDeep } from '../src
 import { config as conf } from '../src/config.js';
 import { getDeviceType as fetchDeviceType, getOS } from '../libraries/userAgentUtils/index.js';
 import { getLowEntropySUA } from '../src/fpd/sua.js';
+import { getGlobal } from '../src/prebidGlobal.js';
+import { calculateTimeoutModifier } from '../libraries/bidderTimeoutUtils/bidderTimeoutUtils.js';
 
 /**
  * @typedef {import('../modules/rtdModule/index.js').RtdSubmodule} RtdSubmodule
@@ -19,6 +21,10 @@ const CONSTANTS = Object.freeze({
   SUBMODULE_NAME: 'pubmatic',
   REAL_TIME_MODULE: 'realTimeData',
   LOG_PRE_FIX: 'PubMatic-Rtd-Provider: ',
+  INCLUDES_VIDEOS: 'includesVideo',
+  NUM_AD_UNITS: 'numAdUnits',
+  DEVICE_TYPE: 'deviceType',
+  CONNECTION_SPEED: 'connectionSpeed',
   UTM: 'utm_',
   UTM_VALUES: {
     TRUE: '1',
@@ -36,6 +42,29 @@ const CONSTANTS = Object.freeze({
     CONFIGS: 'config.json'
   }
 });
+
+export const RULES_PERCENTAGE = {
+  [CONSTANTS.INCLUDES_VIDEOS]: {
+    "true": 20, // 20% of bidderTimeout
+    "false": 5  // 5% of bidderTimeout
+  },
+  [CONSTANTS.NUM_AD_UNITS]: {
+    "1-5": 10,   // 10% of bidderTimeout
+    "6-10": 20,  // 20% of bidderTimeout
+    "11-15": 30  // 30% of bidderTimeout
+  },
+  [CONSTANTS.DEVICE_TYPE]: {
+    "2": 5,   // 5% of bidderTimeout
+    "4": 10,  // 10% of bidderTimeout
+    "5": 20   // 20% of bidderTimeout
+  },
+  [CONSTANTS.CONNECTION_SPEED]: {
+    "slow": 20,     // 20% of bidderTimeout
+    "medium": 10,   // 10% of bidderTimeout
+    "fast": 5,      // 5% of bidderTimeout
+    "unknown": 1    // 1% of bidderTimeout
+  }
+};
 
 const BROWSER_REGEX_MAP = [
   { regex: /\b(?:crios)\/([\w\.]+)/i, id: 1 }, // Chrome for iOS
@@ -192,48 +221,72 @@ export const fetchData = async (publisherId, profileId, type) => {
 };
 
 /**
+ * Creates dynamic rules based on percentage values and baseTimeout
+ * @param {Object} percentageRules - Rules with percentage values
+ * @param {number} baseTimeout - Base timeout in milliseconds
+ * @return {Object} - Rules with calculated millisecond values
+ */
+export const createDynamicRules = (percentageRules, baseTimeout) => {
+  if (!percentageRules || !baseTimeout) {
+    return {};
+  }
+
+  const dynamicRules = {};
+  Object.keys(percentageRules).forEach(category => {
+    dynamicRules[category] = {};
+    
+    Object.keys(percentageRules[category]).forEach(key => {
+      const percentValue = percentageRules[category][key];
+        dynamicRules[category][key] = Math.floor(baseTimeout * (percentValue / 100));
+    });
+  });
+
+  return dynamicRules;
+};
+
+/**
  * Initialize the Pubmatic RTD Module.
  * @param {Object} config
  * @param {Object} _userConsent
  * @returns {boolean}
  */
 const init = (config, _userConsent) => {
-    initTime = Date.now(); // Capture the initialization time
-    const { publisherId, profileId } = config?.params || {};
+  initTime = Date.now(); // Capture the initialization time
+  const { publisherId, profileId } = config?.params || {};
 
-    if (!publisherId || !isStr(publisherId) || !profileId || !isStr(profileId)) {
-      logError(
-        `${CONSTANTS.LOG_PRE_FIX} ${!publisherId ? 'Missing publisher Id.'
-          : !isStr(publisherId) ? 'Publisher Id should be a string.'
-            : !profileId ? 'Missing profile Id.'
-              : 'Profile Id should be a string.'
-        }`
-      );
-      return false;
-    }
+  if (!publisherId || !isStr(publisherId) || !profileId || !isStr(profileId)) {
+    logError(
+      `${CONSTANTS.LOG_PRE_FIX} ${!publisherId ? 'Missing publisher Id.'
+        : !isStr(publisherId) ? 'Publisher Id should be a string.'
+          : !profileId ? 'Missing profile Id.'
+            : 'Profile Id should be a string.'
+      }`
+    );
+    return false;
+  }
 
-    if (!isFn(continueAuction)) {
-      logError(`${CONSTANTS.LOG_PRE_FIX} continueAuction is not a function. Please ensure to add priceFloors module.`);
-      return false;
-    }
+  if (!isFn(continueAuction)) {
+    logError(`${CONSTANTS.LOG_PRE_FIX} continueAuction is not a function. Please ensure to add priceFloors module.`);
+    return false;
+  }
 
-    _fetchFloorRulesPromise = fetchData(publisherId, profileId, "FLOORS");
-    _fetchConfigPromise = fetchData(publisherId, profileId, "CONFIGS");
+  _fetchFloorRulesPromise = fetchData(publisherId, profileId, "FLOORS");
+  _fetchConfigPromise = fetchData(publisherId, profileId, "CONFIGS");
 
-    _fetchConfigPromise.then(async (profileConfigs) => {
-      const auctionDelay = conf.getConfig('realTimeData').auctionDelay;
-      const maxWaitTime = 0.8 * auctionDelay;
+  _fetchConfigPromise.then(async (profileConfigs) => {
+    const auctionDelay = conf.getConfig('realTimeData').auctionDelay;
+    const maxWaitTime = 0.8 * auctionDelay;
 
-      const elapsedTime = Date.now() - initTime;
-      const remainingTime = Math.max(maxWaitTime - elapsedTime, 0);
-      const floorsData = await withTimeout(_fetchFloorRulesPromise, remainingTime);
+    const elapsedTime = Date.now() - initTime;
+    const remainingTime = Math.max(maxWaitTime - elapsedTime, 0);
+    const floorsData = await withTimeout(_fetchFloorRulesPromise, remainingTime);
 
-      floorsConfig = getFloorsConfig(floorsData, profileConfigs);
-      floorsConfig && conf.setConfig(floorsConfig);
-      configMerged();
-    });
+    floorsConfig = getFloorsConfig(floorsData, profileConfigs);
+    floorsConfig && conf.setConfig(floorsConfig);
+    configMerged();
+  });
 
-    return true;
+  return true;
 };
 
 /**
@@ -243,27 +296,44 @@ const init = (config, _userConsent) => {
  * @param {Object} userConsent
  */
 const getBidRequestData = (reqBidsConfigObj, callback) => {
-    configMergedPromise.then(() => {
-      reqBidsConfigObj.adUnits.forEach(adUnit => {
-        let highestCachedBid;
-        highestCachedBid = getGlobal().getHighestUnusedBidResponseForAdUnitCode(adUnit.code);
-        if (!floorsConfig?.floors?.floorMin || highestCachedBid?.cpm > floorsConfig?.floors?.floorMin) {
-          let ortb2Imp = {
-            ext: {
-              prebid: {
-                floors: {
-                  floorMin: highestCachedBid.cpm
-                }
+  _fetchConfigPromise.then((profileConfigs) => {
+    const timeoutConfig = profileConfigs?.plugins?.bidderTimeout;
+
+    if (timeoutConfig?.enabled) {
+      let rules;
+      const adUnits = reqBidsConfigObj.adUnits || getGlobal().adUnits;
+      const bidderTimeout = timeoutConfig.baseTimeout ? timeoutConfig.baseTimeout : reqBidsConfigObj.timeout || getGlobal().getConfig('bidderTimeout');
+      if (timeoutConfig.rules && Object.keys(timeoutConfig.rules).length > 0) {
+        rules = timeoutConfig.rules;
+      } else {
+        rules = createDynamicRules(RULES_PERCENTAGE, bidderTimeout);
+      }
+      const timeoutModifier = calculateTimeoutModifier(adUnits, rules);
+      reqBidsConfigObj.timeout = bidderTimeout + timeoutModifier;
+    }
+  });
+
+  configMergedPromise.then(() => {
+    reqBidsConfigObj.adUnits.forEach(adUnit => {
+      let highestCachedBid;
+      highestCachedBid = getGlobal().getHighestUnusedBidResponseForAdUnitCode(adUnit.code);
+      if (!floorsConfig?.floors?.floorMin || highestCachedBid?.cpm > floorsConfig?.floors?.floorMin) {
+        let ortb2Imp = {
+          ext: {
+            prebid: {
+              floors: {
+                floorMin: highestCachedBid.cpm
               }
             }
           }
-          mergeDeep(adUnit.ortb2Imp, {...ortb2Imp});
-        }        
-      });
+        }
+        mergeDeep(adUnit.ortb2Imp, {...ortb2Imp});
+      }        
+    });
 
-      const hookConfig = {
-            reqBidsConfigObj,
-            context: this,
+    const hookConfig = {
+      reqBidsConfigObj,
+      context: this,
             nextFn: () => true,
             haveExited: false,
             timer: null
