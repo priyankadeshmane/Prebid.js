@@ -314,22 +314,27 @@ const getBidRequestData = (reqBidsConfigObj, callback) => {
   });
 
   configMergedPromise.then(() => {
-    reqBidsConfigObj.adUnits.forEach(adUnit => {
-      let highestCachedBid;
-      highestCachedBid = getGlobal().getHighestUnusedBidResponseForAdUnitCode(adUnit.code);
-      if (!floorsConfig?.floors?.floorMin || highestCachedBid?.cpm > floorsConfig?.floors?.floorMin) {
-        let ortb2Imp = {
-          ext: {
-            prebid: {
-              floors: {
-                floorMin: highestCachedBid.cpm
+    if(conf.getConfig('useBidCache')) {
+      reqBidsConfigObj.adUnits.forEach(adUnit => {
+        let highestCachedBid;
+        highestCachedBid = getGlobal().getHighestUnusedBidResponseForAdUnitCode(adUnit.code);
+        const globalFloor = floorsConfig?.floors?.floorMin;
+        const adUnitFloor = adUnit?.ortb2Imp?.ext?.prebid?.floors?.floorMin;
+        const bidCpm = highestCachedBid?.cpm;
+        if (!globalFloor || (bidCpm > globalFloor && (!adUnitFloor || (bidCpm > adUnitFloor)))) {
+          let ortb2Imp = {
+            ext: {
+              prebid: {
+                floors: {
+                  floorMin: bidCpm
+                }
               }
             }
           }
-        }
-        mergeDeep(adUnit.ortb2Imp, {...ortb2Imp});
-      }        
-    });
+          mergeDeep(adUnit, { ortb2Imp: ortb2Imp });
+        }        
+      });
+    }
 
     const hookConfig = {
       reqBidsConfigObj,
