@@ -7,10 +7,12 @@ import { config as conf } from '../../../src/config';
 import * as hook from '../../../src/hook.js';
 import {
     registerSubModule, pubmaticSubmodule, getFloorsConfig, fetchData,
-    getCurrentTimeOfDay, getBrowserType, getOs, getDeviceType, getCountry, getUtm, _country,
-    _profileConfigs, _floorsData, defaultValueTemplate, withTimeout, configMerged, setFloorsConfig
+    getCurrentTimeOfDay, getBrowserType, getOs, getDeviceType, getCountry, getUtm, _country, setFloorsConfig, 
+    _profileConfigs, _floorsData, defaultValueTemplate, withTimeout, configMerged, createDynamicRules, RULES_PERCENTAGE
 } from '../../../modules/pubmaticRtdProvider.js';
 import sinon from 'sinon';
+import * as bidderTimeoutUtils from '../../../libraries/bidderTimeoutUtils/bidderTimeoutUtils.js';
+import * as prebidGlobal from 'src/prebidGlobal.js';
 
 describe('Pubmatic RTD Provider', () => {
     let sandbox;
@@ -511,13 +513,13 @@ describe('Pubmatic RTD Provider', () => {
             }],
             auctionId: 'auction-id-0',
             ortb2Fragments: {
-              bidder: {
-                user: {
-                  ext: {
-                    ctr: 'US',
-                  }
+                bidder: {
+                    user: {
+                        ext: {
+                            ctr: 'US',
+                        }
+                    }
                 }
-              }
             }
         };
 
@@ -537,6 +539,11 @@ describe('Pubmatic RTD Provider', () => {
             timer: null
         };
 
+        const timeoutConfig = {
+            enabled: true,
+            baseTimeout: 2000
+        };
+
         beforeEach(() => {
             callback = sinon.spy();
             continueAuctionStub = sandbox.stub(priceFloors, 'continueAuction');
@@ -549,6 +556,16 @@ describe('Pubmatic RTD Provider', () => {
             sandbox.stub(prebidGlobal, 'getGlobal').returns(mockGlobal);
     
             global.configMergedPromise = Promise.resolve();
+            global._fetchConfigPromise = Promise.resolve({
+                plugins: {
+                    bidderTimeout: timeoutConfig
+                }
+            });
+            global._fetchConfigPromise = Promise.resolve({
+                plugins: {
+                    bidderTimeout: timeoutConfig
+                }
+            });
         });
     
         afterEach(() => {
@@ -562,7 +579,6 @@ describe('Pubmatic RTD Provider', () => {
                 }
             };
             setFloorsConfig(floorsConfig);
-
             configMerged();
             await pubmaticSubmodule.getBidRequestData(reqBidsConfigObj, callback);
     
@@ -578,11 +594,98 @@ describe('Pubmatic RTD Provider', () => {
                 }
             };
             setFloorsConfig(floorsConfig);
-
             configMerged();
             await pubmaticSubmodule.getBidRequestData(reqBidsConfigObj, callback);
     
             expect(callback.called).to.be.true;
+        });
+
+        it('should increment the timeout with the calculated timeout modifier when bidderTimeout plugin is enabled', () => {
+            const baseTimeout = 2000;
+            const addedTimeout = 200;
+            const getConfigStub = sandbox.stub().returns(baseTimeout);
+            sandbox.stub(prebidGlobal, 'getGlobal').callsFake(() => {
+                return {
+                    getConfig: getConfigStub,
+                    adUnits: [{
+                        code: 'test1',
+                        mediaTypes: {
+                            video: {}
+                        }
+                    }]
+                }
+            });
+
+            const reqBidsConfigObj = {
+                adUnits: [{
+                    code: 'test1',
+                    mediaTypes: {
+                        video: {}
+                    }
+                }],
+                timeout: baseTimeout,
+                ortb2Fragments: {
+                    bidder: {}
+                }
+            };
+
+            const calculateTimeoutModifierStub = sandbox.stub(bidderTimeoutUtils, 'calculateTimeoutModifier');
+            calculateTimeoutModifierStub.returns(addedTimeout);
+
+            const timeoutConfig = {
+                enabled: true,
+                baseTimeout: baseTimeout
+            };
+
+            const adUnits = reqBidsConfigObj.adUnits || getGlobal().adUnits;
+            const timeoutModifier = calculateTimeoutModifierStub(adUnits);
+            const bidderTimeout = timeoutConfig.baseTimeout ? timeoutConfig.baseTimeout : reqBidsConfigObj.timeout || getGlobal().getConfig('bidderTimeout');
+            reqBidsConfigObj.timeout = bidderTimeout + timeoutModifier;
+
+            expect(calculateTimeoutModifierStub.called).to.be.true;
+            expect(reqBidsConfigObj.timeout).to.equal(baseTimeout + addedTimeout);
+        });
+
+        it('should increment timeout with multiple matching rules', () => {
+            const baseTimeout = 2000;
+            const addedTimeout = 400;
+            const getConfigStub = sandbox.stub().returns(baseTimeout);
+            sandbox.stub(prebidGlobal, 'getGlobal').callsFake(() => {
+                return {
+                    getConfig: getConfigStub
+                }
+            });
+            const testReqBidsConfigObj = {
+                adUnits: [{
+                    code: 'test1',
+                    mediaTypes: {
+                        video: {}
+                    }
+                }, {
+                    code: 'test2',
+                    mediaTypes: {
+                        video: {}
+                    }
+                }],
+                timeout: baseTimeout,
+                ortb2Fragments: {
+                    bidder: {}
+                }
+            };
+            const rules = {
+                numAdUnits: {
+                    '2': addedTimeout / 2
+                },
+                includesVideo: {
+                    'true': addedTimeout / 2,
+                    'false': 50
+                }
+            };
+            
+            const timeoutModifier = bidderTimeoutUtils.calculateTimeoutModifier(testReqBidsConfigObj.adUnits, rules);
+            testReqBidsConfigObj.timeout = baseTimeout + timeoutModifier;
+            
+            expect(testReqBidsConfigObj.timeout).to.equal(baseTimeout + addedTimeout);
         });
 
         describe('floorMin setting', () => {
@@ -605,9 +708,9 @@ describe('Pubmatic RTD Provider', () => {
                 };
                 getHighestUnusedBidStub.returns({ cpm: 10 });
                 setFloorsConfig(floorsConfig);
-                
+
                 await pubmaticSubmodule.getBidRequestData(reqBidsConfigObj, callback);
-                
+
                 expect(reqBidsConfigObj.adUnits[0].ortb2Imp.ext.prebid.floors.floorMin).to.equal(10);
             });
 
@@ -619,9 +722,9 @@ describe('Pubmatic RTD Provider', () => {
                 };
                 getHighestUnusedBidStub.returns({ cpm: 5 });
                 setFloorsConfig(floorsConfig);
-                
+
                 await pubmaticSubmodule.getBidRequestData(reqBidsConfigObj, callback);
-                
+
                 expect(reqBidsConfigObj.adUnits[0].ortb2Imp.ext.prebid.floors.floorMin).to.be.undefined;
             });
 
@@ -629,9 +732,9 @@ describe('Pubmatic RTD Provider', () => {
                 const floorsConfig = {};
                 getHighestUnusedBidStub.returns({ cpm: 5 });
                 setFloorsConfig(floorsConfig);
-                
+
                 await pubmaticSubmodule.getBidRequestData(reqBidsConfigObj, callback);
-                
+
                 expect(reqBidsConfigObj.adUnits[0].ortb2Imp.ext.prebid.floors.floorMin).to.equal(5);
             });
 
@@ -639,9 +742,9 @@ describe('Pubmatic RTD Provider', () => {
                 const floorsConfig = {};
                 getHighestUnusedBidStub.returns(null);
                 setFloorsConfig(floorsConfig);
-                
+
                 await pubmaticSubmodule.getBidRequestData(reqBidsConfigObj, callback);
-                
+
                 expect(reqBidsConfigObj.adUnits[0].ortb2Imp.ext.prebid.floors.floorMin).to.be.undefined;
             });
         });
@@ -689,6 +792,76 @@ describe('Pubmatic RTD Provider', () => {
             
             clearTimeoutSpy.restore();
             clock.restore();
+        });
+    });
+
+    describe('createDynamicRules', function () {
+        it('should correctly convert percentage values to milliseconds', function () {
+            const baseTimeout = 1000;
+            const dynamicRules = createDynamicRules(RULES_PERCENTAGE, baseTimeout);
+            
+            expect(dynamicRules['includesVideo']['true']).to.equal(200);
+            expect(dynamicRules['includesVideo']['false']).to.equal(50);
+            
+            expect(dynamicRules['numAdUnits']['1-5']).to.equal(100);
+            expect(dynamicRules['numAdUnits']['6-10']).to.equal(200);
+            expect(dynamicRules['numAdUnits']['11-15']).to.equal(300);
+            
+            expect(dynamicRules['deviceType']['2']).to.equal(50);
+            expect(dynamicRules['deviceType']['4']).to.equal(100);
+            expect(dynamicRules['deviceType']['5']).to.equal(200);
+            
+            expect(dynamicRules['connectionSpeed']['slow']).to.equal(200);
+            expect(dynamicRules['connectionSpeed']['medium']).to.equal(100);
+            expect(dynamicRules['connectionSpeed']['fast']).to.equal(50);
+            expect(dynamicRules['connectionSpeed']['unknown']).to.equal(10);
+        });
+
+        it('should correctly handle different baseTimeout values', function () {
+            const baseTimeout = 2000;
+            const dynamicRules = createDynamicRules(RULES_PERCENTAGE, baseTimeout);
+            
+            expect(dynamicRules['includesVideo']['true']).to.equal(400);
+            expect(dynamicRules['numAdUnits']['6-10']).to.equal(400);
+            expect(dynamicRules['deviceType']['4']).to.equal(200);
+            expect(dynamicRules['connectionSpeed']['medium']).to.equal(200);
+        });
+
+        it('should return empty object when percentageRules is not provided', function () {
+            const baseTimeout = 1000;
+            const dynamicRules = createDynamicRules(null, baseTimeout);
+            
+            expect(dynamicRules).to.deep.equal({});
+        });
+
+        it('should return empty object when baseTimeout is not provided', function () {
+            const dynamicRules = createDynamicRules(RULES_PERCENTAGE, null);
+            
+            expect(dynamicRules).to.deep.equal({});
+        });
+
+        it('should handle empty percentageRules object', function () {
+            const baseTimeout = 1000;
+            const dynamicRules = createDynamicRules({}, baseTimeout);
+            
+            expect(dynamicRules).to.deep.equal({});
+        });
+
+        it('should round down decimal values to integers', function () {
+            const baseTimeout = 333;
+            const testRules = {
+                test: {
+                    'a': 10,
+                    'b': 33,
+                    'c': 66
+                }
+            };
+            
+            const dynamicRules = createDynamicRules(testRules, baseTimeout);
+            
+            expect(dynamicRules.test['a']).to.equal(33);
+            expect(dynamicRules.test['b']).to.equal(109);
+            expect(dynamicRules.test['c']).to.equal(219);
         });
     });
 });
