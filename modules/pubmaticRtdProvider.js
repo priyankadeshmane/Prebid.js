@@ -4,7 +4,6 @@ import { config as conf } from '../src/config.js';
 import { getDeviceType as fetchDeviceType, getOS } from '../libraries/userAgentUtils/index.js';
 import { getLowEntropySUA } from '../src/fpd/sua.js';
 import { getGlobal } from '../src/prebidGlobal.js';
-import { calculateTimeoutModifier } from '../libraries/bidderTimeoutUtils/bidderTimeoutUtils.js';
 
 /**
  * @typedef {import('../modules/rtdModule/index.js').RtdSubmodule} RtdSubmodule
@@ -15,16 +14,11 @@ import { calculateTimeoutModifier } from '../libraries/bidderTimeoutUtils/bidder
  * We utilize the continueAuction function from the priceFloors module to incorporate price floors data into the current auction.
  */
 import { continueAuction } from './priceFloors.js'; // eslint-disable-line prebid/validate-imports
-import { getGlobal } from '../src/prebidGlobal.js';
 
 const CONSTANTS = Object.freeze({
   SUBMODULE_NAME: 'pubmatic',
   REAL_TIME_MODULE: 'realTimeData',
   LOG_PRE_FIX: 'PubMatic-Rtd-Provider: ',
-  INCLUDES_VIDEOS: 'includesVideo',
-  NUM_AD_UNITS: 'numAdUnits',
-  DEVICE_TYPE: 'deviceType',
-  CONNECTION_SPEED: 'connectionSpeed',
   UTM: 'utm_',
   UTM_VALUES: {
     TRUE: '1',
@@ -42,29 +36,6 @@ const CONSTANTS = Object.freeze({
     CONFIGS: 'config.json'
   }
 });
-
-export const RULES_PERCENTAGE = {
-  [CONSTANTS.INCLUDES_VIDEOS]: {
-    "true": 20, // 20% of bidderTimeout
-    "false": 5  // 5% of bidderTimeout
-  },
-  [CONSTANTS.NUM_AD_UNITS]: {
-    "1-5": 10,   // 10% of bidderTimeout
-    "6-10": 20,  // 20% of bidderTimeout
-    "11-15": 30  // 30% of bidderTimeout
-  },
-  [CONSTANTS.DEVICE_TYPE]: {
-    "2": 5,   // 5% of bidderTimeout
-    "4": 10,  // 10% of bidderTimeout
-    "5": 20   // 20% of bidderTimeout
-  },
-  [CONSTANTS.CONNECTION_SPEED]: {
-    "slow": 20,     // 20% of bidderTimeout
-    "medium": 10,   // 10% of bidderTimeout
-    "fast": 5,      // 5% of bidderTimeout
-    "unknown": 1    // 1% of bidderTimeout
-  }
-};
 
 const BROWSER_REGEX_MAP = [
   { regex: /\b(?:crios)\/([\w\.]+)/i, id: 1 }, // Chrome for iOS
@@ -221,30 +192,6 @@ export const fetchData = async (publisherId, profileId, type) => {
 };
 
 /**
- * Creates dynamic rules based on percentage values and baseTimeout
- * @param {Object} percentageRules - Rules with percentage values
- * @param {number} baseTimeout - Base timeout in milliseconds
- * @return {Object} - Rules with calculated millisecond values
- */
-export const createDynamicRules = (percentageRules, baseTimeout) => {
-  if (!percentageRules || !baseTimeout) {
-    return {};
-  }
-
-  const dynamicRules = {};
-  Object.keys(percentageRules).forEach(category => {
-    dynamicRules[category] = {};
-    
-    Object.keys(percentageRules[category]).forEach(key => {
-      const percentValue = percentageRules[category][key];
-        dynamicRules[category][key] = Math.floor(baseTimeout * (percentValue / 100));
-    });
-  });
-
-  return dynamicRules;
-};
-
-/**
  * Initialize the Pubmatic RTD Module.
  * @param {Object} config
  * @param {Object} _userConsent
@@ -296,23 +243,6 @@ const init = (config, _userConsent) => {
  * @param {Object} userConsent
  */
 const getBidRequestData = (reqBidsConfigObj, callback) => {
-  _fetchConfigPromise.then((profileConfigs) => {
-    const timeoutConfig = profileConfigs?.plugins?.bidderTimeout;
-
-    if (timeoutConfig?.enabled) {
-      let rules;
-      const adUnits = reqBidsConfigObj.adUnits || getGlobal().adUnits;
-      const bidderTimeout = timeoutConfig.baseTimeout ? timeoutConfig.baseTimeout : reqBidsConfigObj.timeout || getGlobal().getConfig('bidderTimeout');
-      if (timeoutConfig.rules && Object.keys(timeoutConfig.rules).length > 0) {
-        rules = timeoutConfig.rules;
-      } else {
-        rules = createDynamicRules(RULES_PERCENTAGE, bidderTimeout);
-      }
-      const timeoutModifier = calculateTimeoutModifier(adUnits, rules);
-      reqBidsConfigObj.timeout = bidderTimeout + timeoutModifier;
-    }
-  });
-
   configMergedPromise.then(() => {
     if(conf.getConfig('useBidCache')) {
       reqBidsConfigObj.adUnits.forEach(adUnit => {
