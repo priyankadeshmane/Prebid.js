@@ -65,6 +65,8 @@ export let configMerged;
 // configMerged is a reference to the function that can resolve configMergedPromise whenever we want
 let configMergedPromise = new Promise((resolve) => { configMerged = resolve; });
 export let _country;
+let hashSchema;
+let hashDelimiter;
 
 // Waits for a given promise to resolve within a timeout
 export function withTimeout(promise, ms) {
@@ -114,6 +116,46 @@ export const getUtm = () => {
   return urlParams && urlParams.toString().includes(CONSTANTS.UTM) ? CONSTANTS.UTM_VALUES.TRUE : CONSTANTS.UTM_VALUES.FALSE;
 }
 
+export const getHash = () => {
+  // Split the hashSchema string into individual fields
+  const schemaFields = hashSchema.split(hashDelimiter);
+  
+  // Map each field to its corresponding function result
+  const fieldValues = schemaFields.map(field => {
+    const fieldFunction = fieldFunctionMap[field];
+    return (fieldFunction && typeof fieldFunction === 'function') ? fieldFunction() : '*';
+  });
+
+  // Join the values back with the delimiter
+  const valueString = fieldValues.join(hashDelimiter);
+  
+  // Calculate and return the final hash
+  return getCustomField(valueString);
+}
+
+const getCustomField = function (str) {
+  var hash = 0;
+  var i;
+  var chr;
+  if (str.length === 0) return hash;
+  for (i = 0; i < str.length; i++) {
+    chr = str.charCodeAt(i);
+    hash = (hash << 5) - hash + chr;
+    hash |= 0; // Convert to 32bit integer
+  }
+  return hash.toString();
+};
+
+export const fieldFunctionMap = {
+  deviceType: getDeviceType,
+  timeOfDay: getCurrentTimeOfDay,
+  browser: getBrowserType,
+  os: getOs,
+  utm: getUtm,
+  country: getCountry,
+  hash: getHash
+}
+
 export const getFloorsConfig = (floorsData, profileConfigs) => {
     if (!isPlainObject(profileConfigs) || isEmpty(profileConfigs)) {
       logError(`${CONSTANTS.LOG_PRE_FIX} profileConfigs is not an object or is empty`);
@@ -144,20 +186,16 @@ export const getFloorsConfig = (floorsData, profileConfigs) => {
     // If skiprate is provided in configs, overwrite the value in finalFloorsData
     (config.skipRate !== undefined) && (finalFloorsData.skipRate = config.skipRate);
 
+    hashSchema = finalFloorsData.hashSchema ?? "";
+    hashDelimiter = finalFloorsData.delimiter ?? "|";
+    
     // merge default configs from page, configs
     return {
         floors: {
             ...defaultFloorConfig,
             ...config,
             data: finalFloorsData,
-            additionalSchemaFields: {
-                deviceType: getDeviceType,
-                timeOfDay: getCurrentTimeOfDay,
-                browser: getBrowserType,
-                os: getOs,
-                utm: getUtm,
-                country: getCountry,
-            },
+            additionalSchemaFields: fieldFunctionMap
         },
     };
 };
